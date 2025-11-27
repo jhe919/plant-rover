@@ -1,0 +1,28 @@
+# OS cruft
+.DS_Store
+
+# Python / build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+
+# Virtual environments
+.venv/
+venv/
+
+# Ultralytics / training outputs
+runs/
+*.pt
+
+# Local datasets (regenerate with tools/csvtoyolo.py)
+dataset/
+datasets/
+data/
+
+# IDE configurations
+.vscode/
+.idea/
+
