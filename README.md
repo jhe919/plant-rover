@@ -1,46 +1,44 @@
 # Plant Rover (Healthy vs Unhealthy Plants)
 
-This repo trains and runs a YOLOv8 detector to tell whether leaves seen by your rover’s camera look healthy or unhealthy. It contains:
+This repository powers your rover’s plant-health workflow end-to-end:
 
-- A converter that turns the PlantDoc dataset CSVs into YOLO format with optional class remapping (`tools/csvtoyolo.py`).
-- A training helper that fine-tunes YOLOv8 (GPU or CPU) on the binary “healthy vs unhealthy” task (`src/train_health_model.py`).
-- Webcam utilities to test the trained weights live, plus scripts to check the camera, capture raw frames, etc (`src/webcam_predict.py`, `src/detect_webcam.py`, `src/test_camera.py`).
-- Documentation (`HEALTH_MODEL.md`) outlining the full pipeline and integration tips for your teammate’s UI.
+- Converts PlantDoc labels into YOLO format and lets you map classes to healthy/unhealthy (`tools/csvtoyolo.py`, `tools/healthy_classes.txt`).
+- Fine-tunes YOLOv8 detectors for real-time plant-health inference (`src/train_health_model.py`).
+- Streams annotated webcam footage to your teammate’s RoverUI dashboard (`src/ui_stream_server.py` + `RoverUI-main/`).
 
-## Setup
+Follow the sections below to prepare data, train, test, and launch the web UI.
 
-1. **Install dependencies** (macOS example):
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install --upgrade pip
-   pip install ultralytics opencv-python torch torchvision
-   ```
-   On Apple Silicon, be sure you install the Metal (MPS) build of PyTorch per the [official instructions](https://pytorch.org/get-started/locally/).
+---
 
-2. **Check the environment**:
-   ```bash
-   python src/check_env.py
-   ```
-   Confirms Python/Torch versions and whether MPS/CUDA/CPU are available.
+## 1. Setup (Python side)
 
-## Prepare the dataset
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install ultralytics opencv-python torch torchvision flask flask-cors
+python src/check_env.py  # confirms PyTorch+device
+```
 
-1. Download and unzip the original PlantDoc Object Detection dataset into `datasets/PlantDoc-Object-Detection-Dataset` (already in this repo for local use).
-2. Convert the CSVs to YOLO format with the health split:
+> On Apple Silicon, install the official MPS wheels from pytorch.org.
+
+## 2. Prepare the PlantDoc dataset
+
+1. Download/unzip [PlantDoc (object detection)](https://github.com/pratikkayal/PlantDoc-Dataset) into `datasets/PlantDoc-Object-Detection-Dataset/`.
+2. Convert to YOLO format with the health split:
    ```bash
    python tools/csvtoyolo.py \
        --health-split \
        --health-healthy-list tools/healthy_classes.txt \
        --out-root datasets/plantdoc_health_yolo
    ```
-   - Edit `tools/healthy_classes.txt` or pass your own file to control which PlantDoc labels count as “healthy”.
-   - Use `--class-map mapping.json` if you need more than two classes.
-   - The script writes `dataset.yaml` under the chosen output directory.
+   - Edit `tools/healthy_classes.txt` or pass a custom file to change which classes count as “healthy”.
+   - Use `--class-map mapping.json` for custom label remaps.
+   - Outputs live under `datasets/plantdoc_health_yolo/` with `dataset.yaml` for Ultralytics.
 
-## Train a model
+## 3. Train a YOLOv8 model
 
-Use the helper script to fine-tune any YOLOv8 checkpoint:
+Typical run (tweak epochs/backbone as needed):
 ```bash
 python src/train_health_model.py \
     --data datasets/plantdoc_health_yolo/dataset.yaml \
@@ -52,34 +50,82 @@ python src/train_health_model.py \
     --name yolov8s_health
 ```
 
-- The script automatically picks the best device (`mps` → `cuda` → `cpu`). Override with `--device`.
-- For quick experiments on macOS, try `--model yolov8n.pt --epochs 40 --batch 8 --imgsz 512`.
-- Outputs (weights, metrics, plots) land under `runs/health/<name>/`.
-- See `HEALTH_MODEL.md` for tuning ideas and accuracy tips.
+Quick macOS-friendly run:
+```bash
+python src/train_health_model.py \
+    --data datasets/plantdoc_health_yolo/dataset.yaml \
+    --model yolov8n.pt \
+    --epochs 40 \
+    --batch 8 \
+    --imgsz 512 \
+    --project runs/health \
+    --name yolov8n_health_fast
+```
 
-## Run live webcam inference
+- Automatically picks `mps` → `cuda` → `cpu`; override with `--device`.
+- Results: `runs/health/<name>/weights/best.pt`, `results.png`, `results.csv`, etc.
+- Env var `PYTORCH_ENABLE_MPS_FALLBACK=1` is set automatically for MPS NMS compatibility.
 
-1. Connect your camera and run:
+## 4. Local webcam test (optional)
+
+```bash
+python src/webcam_predict.py \
+    --weights runs/health/<run>/weights/best.pt \
+    --conf 0.35 \
+    --source 0 \
+    --health-labels healthy unhealthy
+```
+Press `q` to exit. This shows detections in an OpenCV window outside the UI.
+
+## 5. Stream detections to RoverUI
+
+1. **Start the streaming backend** (MJPEG + JSON endpoints):
    ```bash
-   python src/webcam_predict.py \
-       --weights runs/health/yolov8s_health/weights/best.pt \
+   python src/ui_stream_server.py \
+       --weights runs/health/<run>/weights/best.pt \
        --conf 0.35 \
        --source 0 \
-       --health-labels healthy unhealthy
+       --port 8000
    ```
-2. The OpenCV window draws detections and shows a HUD with healthy/unhealthy counts plus the total number of boxes. Press `q` to quit.
-3. Adjust `--source` for other cameras/streams, `--imgsz` for inference size, and `--width/--height` to match your rover camera.
+   Endpoints:
+   - `http://localhost:8000/video_feed` – annotated MJPEG stream
+   - `http://localhost:8000/health` – JSON counts per class
 
-Utility scripts:
-- `src/test_camera.py`: verify the webcam feed without YOLO.
-- `src/detect_webcam.py`: run the stock YOLOv8 model for comparison and dataset collection (`S` key saves frames).
-- `tools/csvtoyolo.py`: regenerate YOLO labels if you tweak classes or add custom imagery.
+2. **Run the RoverUI frontend** (Node 18+, npm):
+   ```bash
+   cd RoverUI-main
+   npm install
+   # Optional override if backend runs elsewhere:
+   echo "VITE_STREAM_URL=http://localhost:8000/video_feed" > .env
+   npm run dev -- --host
+   ```
+   Visit the printed Vite URL (usually `http://localhost:5173`). The Dashboard’s Live Camera Feed now shows the annotated stream and pause overlay as before.
 
-## Status & next steps
+3. **Dependencies**:
+   - Node modules listed in `RoverUI-main/package.json` (Shadcn UI, Vite 6.x, etc.).
+   - `npm audit` currently reports a moderate Vite dev-server advisory; safe to ignore for local development or upgrade when convenient (`npm audit fix --force`).
 
-Right now the project trains binary healthy/unhealthy detectors and visualizes counts in real time. Upcoming work:
-- Integrate the webcam loop with your teammate’s UI (see ideas in `HEALTH_MODEL.md`).
-- Export trained weights to ONNX/CoreML/TensorRT if you deploy to embedded hardware.
-- Collect rover-specific footage to fine-tune on your target environment for better accuracy.
+## 6. Repository hygiene & syncing
 
-Questions? Run `python src/webcam_predict.py --help` or open an issue in this repo.
+- `.gitignore` already excludes heavy artifacts: datasets/, `runs/`, `.venv/`, `*.pt`, etc.
+- To version code:
+  ```bash
+  git init
+  git add .
+  git commit -m "Initial plant rover repo"
+  git remote add origin <YOUR_GITHUB_URL>
+  git branch -M main
+  git push -u origin main
+  ```
+- If you train on another PC, copy `datasets/plantdoc_health_yolo` there, run training, and copy the resulting `runs/health/<run>/weights/best.pt` back for inference/UI.
+
+## 7. Files of interest
+
+- `src/train_health_model.py` – CLI for Ultralytics training.
+- `src/ui_stream_server.py` – Flask bridge powering the UI feed.
+- `src/webcam_predict.py` – standalone webcam viewer/debugger.
+- `tools/csvtoyolo.py` – dataset converter with health split, class maps, and output directory control.
+- `RoverUI-main/src/components/Dashboard.tsx` – loads the stream URL without altering the UI design.
+- `HEALTH_MODEL.md` – broader workflow tips, accuracy advice, and UI integration notes.
+
+You’re ready to start training, streaming, and showing plant-health detections inside the UI. Let me know when you need export scripts (ONNX/CoreML) or cloud deployment guidance.
