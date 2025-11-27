@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "./ui/card";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
@@ -18,6 +18,41 @@ export function Dashboard() {
     () => import.meta.env.VITE_STREAM_URL ?? "http://localhost:8000/video_feed",
     []
   );
+  const healthUrl = useMemo(
+    () => import.meta.env.VITE_HEALTH_URL ?? "http://localhost:8000/health",
+    []
+  );
+  const [healthSummary, setHealthSummary] = useState<{
+    total: number;
+    counts: Record<string, number>;
+    timestamp: number | null;
+  }>({ total: 0, counts: {}, timestamp: null });
+
+  useEffect(() => {
+    let mounted = true;
+    const fetchSummary = async () => {
+      try {
+        const res = await fetch(healthUrl);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (mounted) {
+          setHealthSummary({
+            total: data.total ?? 0,
+            counts: data.counts ?? {},
+            timestamp: data.timestamp ?? null,
+          });
+        }
+      } catch (err) {
+        // ignore fetch errors; UI will retry on next tick
+      }
+    };
+    fetchSummary();
+    const id = setInterval(fetchSummary, 2000);
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, [healthUrl]);
 
   const telemetryData = [
     {
@@ -90,6 +125,40 @@ export function Dashboard() {
               </Badge>
             </div>
           )}
+        </div>
+        <div className="mt-4">
+          <p className="text-sm text-muted-foreground mb-3">
+            Latest detections (updates every 2s)
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {Object.entries(healthSummary.counts).length > 0 ? (
+              Object.entries(healthSummary.counts).map(([label, count]) => (
+                <div
+                  key={label}
+                  className="rounded-lg border bg-white/40 px-3 py-2 flex items-center justify-between"
+                >
+                  <span className="text-sm text-muted-foreground capitalize">
+                    {label}
+                  </span>
+                  <span className="text-xl font-semibold text-[#4CAF50]">
+                    {count}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p className="text-muted-foreground col-span-full">
+                Waiting for detections...
+              </p>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Total boxes: {healthSummary.total}{" "}
+            {healthSummary.timestamp
+              ? `(updated ${new Date(
+                  healthSummary.timestamp * 1000
+                ).toLocaleTimeString()})`
+              : ""}
+          </p>
         </div>
       </Card>
 

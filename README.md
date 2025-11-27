@@ -89,14 +89,17 @@ Press `q` to exit. This shows detections in an OpenCV window outside the UI.
    ```
    Endpoints:
    - `http://localhost:8000/video_feed` – annotated MJPEG stream
-   - `http://localhost:8000/health` – JSON counts per class
+   - `http://localhost:8000/health` – JSON counts per class (`{"total": int, "counts": {"healthy": n, ...}, "timestamp": epoch_seconds}`)
 
 2. **Run the RoverUI frontend** (Node 18+, npm):
    ```bash
    cd RoverUI-main
    npm install
    # Optional override if backend runs elsewhere:
-   echo "VITE_STREAM_URL=http://localhost:8000/video_feed" > .env
+   cat <<'EOF' > .env
+   VITE_STREAM_URL=http://localhost:8000/video_feed
+   VITE_HEALTH_URL=http://localhost:8000/health
+   EOF
    npm run dev -- --host
    ```
    Visit the printed Vite URL (usually `http://localhost:5173`). The Dashboard’s Live Camera Feed now shows the annotated stream and pause overlay as before.
