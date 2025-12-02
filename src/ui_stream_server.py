@@ -48,11 +48,16 @@ def choose_device(pref: str) -> str:
     return "cpu"
 
 
-def open_capture(source: str) -> cv2.VideoCapture:
+def open_capture(source: str, backend: str, width: Optional[int], height: Optional[int]) -> cv2.VideoCapture:
+    api = cv2.CAP_V4L2 if backend == "v4l2" else 0
     if source.isdigit():
-        cap = cv2.VideoCapture(int(source))
+        cap = cv2.VideoCapture(int(source), api)
     else:
-        cap = cv2.VideoCapture(source)
+        cap = cv2.VideoCapture(source, api)
+    if width:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    if height:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     return cap
 
 
@@ -75,7 +80,7 @@ def frame_generator(conf: float, imgsz: int, labels_of_interest):
     global latest_summary
     while True:
         ok, frame = cap.read()
-        if not ok:
+        if not ok or frame is None or frame.size == 0:
             time.sleep(0.05)
             continue
         results = model.predict(
@@ -139,6 +144,12 @@ def parse_args():
     ap.add_argument("--imgsz", type=int, default=640,
                     help="Inference image size.")
     ap.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
+    ap.add_argument("--backend", choices=["auto", "v4l2"], default="auto",
+                    help="Preferred OpenCV backend (use v4l2 on Raspberry Pi).")
+    ap.add_argument("--width", type=int, default=None,
+                    help="Optional capture width.")
+    ap.add_argument("--height", type=int, default=None,
+                    help="Optional capture height.")
     ap.add_argument("--health-labels", nargs="*", default=["healthy", "unhealthy"],
                     help="Subset of labels to highlight in the summary endpoint.")
     ap.add_argument("--host", default="0.0.0.0")
@@ -157,9 +168,7 @@ def main():
     global model, cap, predict_device
     model = YOLO(args.weights).to(device)
     predict_device = None if device in ("cpu", "mps") else 0
-    cap = open_capture(args.source)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap = open_capture(args.source, backend=args.backend, width=args.width, height=args.height)
     if not cap.isOpened():
         raise SystemExit("Could not open camera/source. Check permissions or index.")
 
