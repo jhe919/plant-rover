@@ -31,6 +31,7 @@ CORS(app)
 cap: Optional[cv2.VideoCapture] = None
 model: Optional[YOLO] = None
 predict_device: Optional[int] = None
+picam2 = None
 latest_summary: Dict[str, object] = {
     "timestamp": None,
     "total": 0,
@@ -76,10 +77,21 @@ def build_summary(result, labels_of_interest):
 
 
 def frame_generator(conf: float, imgsz: int, labels_of_interest):
-    assert cap is not None and model is not None
+    assert model is not None
     global latest_summary
     while True:
-        ok, frame = cap.read()
+        if picam2 is not None:
+            try:
+                frame = picam2.capture_array()
+            except Exception:
+                time.sleep(0.05)
+                continue
+            ok = frame is not None and getattr(frame, "size", 0) > 0
+            if ok:
+                # picamera2 gives RGB; convert to BGR for OpenCV/YOLO
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        else:
+            ok, frame = cap.read()
         if not ok or frame is None or frame.size == 0:
             time.sleep(0.05)
             continue
@@ -150,6 +162,8 @@ def parse_args():
                     help="Optional capture width.")
     ap.add_argument("--height", type=int, default=None,
                     help="Optional capture height.")
+    ap.add_argument("--picamera2", action="store_true",
+                    help="Use Picamera2 for capture (recommended on Pi if V4L2 frames fail).")
     ap.add_argument("--health-labels", nargs="*", default=["healthy", "unhealthy"],
                     help="Subset of labels to highlight in the summary endpoint.")
     ap.add_argument("--host", default="0.0.0.0")
@@ -165,12 +179,24 @@ def main():
     device = choose_device(args.device)
     print(f"[ui-stream] Using device={device}")
 
-    global model, cap, predict_device
+    global model, cap, predict_device, picam2
     model = YOLO(args.weights).to(device)
     predict_device = None if device in ("cpu", "mps") else 0
-    cap = open_capture(args.source, backend=args.backend, width=args.width, height=args.height)
-    if not cap.isOpened():
-        raise SystemExit("Could not open camera/source. Check permissions or index.")
+    if args.picamera2:
+        try:
+            from picamera2 import Picamera2
+        except ImportError as e:
+            raise SystemExit("Picamera2 not installed. Try: sudo apt install python3-picamera2") from e
+        picam2 = Picamera2()
+        config = picam2.create_preview_configuration(
+            main={"size": (args.width or 1280, args.height or 720), "format": "RGB888"}
+        )
+        picam2.configure(config)
+        picam2.start()
+    else:
+        cap = open_capture(args.source, backend=args.backend, width=args.width, height=args.height)
+        if not cap.isOpened():
+            raise SystemExit("Could not open camera/source. Check permissions or index.")
 
     app.config["CONF"] = args.conf
     app.config["IMGSZ"] = args.imgsz
