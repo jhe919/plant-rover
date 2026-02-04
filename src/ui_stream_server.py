@@ -79,6 +79,17 @@ def build_summary(result, labels_of_interest):
     return out
 
 
+def best_box_center_x(result) -> Optional[float]:
+    boxes = getattr(result, "boxes", None)
+    if boxes is None or len(boxes) == 0:
+        return None
+    # Choose the highest-confidence box to represent the target.
+    confs = boxes.conf.tolist()
+    idx = max(range(len(confs)), key=lambda i: confs[i])
+    x1, y1, x2, y2 = boxes.xyxy[idx].tolist()
+    return (x1 + x2) / 2.0
+
+
 def frame_generator(conf: float, imgsz: int, labels_of_interest):
     assert model is not None
     global latest_summary, last_command_time
@@ -112,26 +123,50 @@ def frame_generator(conf: float, imgsz: int, labels_of_interest):
             "timestamp": time.time(),
         }
         if app.config.get("COMMAND_URL"):
-            unhealthy = latest_summary.get("counts", {}).get("unhealthy", 0)
-            threshold = app.config.get("UNHEALTHY_THRESHOLD", 1)
-            cooldown = app.config.get("COMMAND_COOLDOWN", 2.0)
             now = time.time()
-            if unhealthy >= threshold and (now - last_command_time) >= cooldown:
-                payload = {
-                    "cmd": app.config.get("COMMAND", "STOP"),
-                    "counts": latest_summary.get("counts", {}),
-                    "total": latest_summary.get("total", 0),
-                }
-                try:
-                    req = urllib.request.Request(
-                        app.config["COMMAND_URL"],
-                        data=json.dumps(payload).encode("utf-8"),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    urllib.request.urlopen(req, timeout=0.5)
-                except Exception:
-                    pass
-                last_command_time = now
+            cooldown = app.config.get("COMMAND_COOLDOWN", 2.0)
+            if app.config.get("SEND_X"):
+                x_center = best_box_center_x(r0)
+                if x_center is not None and (now - last_command_time) >= cooldown:
+                    frame_width = r0.orig_shape[1]
+                    x_norm = x_center / max(frame_width, 1)
+                    scale = app.config.get("X_SCALE", 1000)
+                    cmd = f"X {int(x_norm * scale)}"
+                    payload = {
+                        "cmd": cmd,
+                        "x_norm": x_norm,
+                        "scale": scale,
+                        "counts": latest_summary.get("counts", {}),
+                    }
+                    try:
+                        req = urllib.request.Request(
+                            app.config["COMMAND_URL"],
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                        )
+                        urllib.request.urlopen(req, timeout=0.5)
+                    except Exception:
+                        pass
+                    last_command_time = now
+            else:
+                unhealthy = latest_summary.get("counts", {}).get("unhealthy", 0)
+                threshold = app.config.get("UNHEALTHY_THRESHOLD", 1)
+                if unhealthy >= threshold and (now - last_command_time) >= cooldown:
+                    payload = {
+                        "cmd": app.config.get("COMMAND", "STOP"),
+                        "counts": latest_summary.get("counts", {}),
+                        "total": latest_summary.get("total", 0),
+                    }
+                    try:
+                        req = urllib.request.Request(
+                            app.config["COMMAND_URL"],
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                        )
+                        urllib.request.urlopen(req, timeout=0.5)
+                    except Exception:
+                        pass
+                    last_command_time = now
         ok, buffer = cv2.imencode(".jpg", annotated)
         if not ok:
             continue
@@ -196,6 +231,10 @@ def parse_args():
                     help="Minimum unhealthy detections required to emit a command.")
     ap.add_argument("--command-cooldown", type=float, default=2.0,
                     help="Seconds to wait between command sends.")
+    ap.add_argument("--send-x", action="store_true",
+                    help="Send target box center x as 'X <value>' to the command URL.")
+    ap.add_argument("--x-scale", type=int, default=1000,
+                    help="Scale for normalized x (0..1) when sending X command.")
     ap.add_argument("--health-labels", nargs="*", default=["healthy", "unhealthy"],
                     help="Subset of labels to highlight in the summary endpoint.")
     ap.add_argument("--host", default="0.0.0.0")
@@ -237,6 +276,8 @@ def main():
     app.config["COMMAND"] = args.command
     app.config["UNHEALTHY_THRESHOLD"] = args.unhealthy_threshold
     app.config["COMMAND_COOLDOWN"] = args.command_cooldown
+    app.config["SEND_X"] = args.send_x
+    app.config["X_SCALE"] = args.x_scale
 
     atexit.register(cleanup)
     app.run(host=args.host, port=args.port, threaded=True)

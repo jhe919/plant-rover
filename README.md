@@ -140,6 +140,22 @@ If the Arduino is wired to the Pi, you can send movement/pump commands from the 
    - When the unhealthy count reaches the threshold, the backend POSTs a command to the Pi bridge.
    - Example payload: `{"cmd":"STOP","counts":{"healthy":0,"unhealthy":1},"total":1}`
 
+4. **Send target X position instead (for steering)**:
+   ```bash
+   python src/ui_stream_server.py \
+       --weights runs/health/yolov8m_health_pc/weights/best.pt \
+       --conf 0.45 \
+       --source 0 \
+       --imgsz 512 \
+       --device mps \
+       --command-url http://<pi_ip>:9000/command \
+       --send-x \
+       --x-scale 1000 \
+       --command-cooldown 0.2
+   ```
+   - The bridge will receive commands like `X 523` (normalized 0–1000).
+   - Your Arduino should map that X value to steering corrections.
+
 4. **Arduino side** should read a line from Serial and act:
    ```cpp
    if (Serial.available()) {
