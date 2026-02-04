@@ -108,7 +108,49 @@ Press `q` to exit. This shows detections in an OpenCV window outside the UI.
    - Node modules listed in `RoverUI-main/package.json` (Shadcn UI, Vite 6.x, etc.).
    - `npm audit` currently reports a moderate Vite dev-server advisory; safe to ignore for local development or upgrade when convenient (`npm audit fix --force`).
 
-## 6. Repository hygiene & syncing
+## 6. Arduino control (Option A: Mac/PC -> Pi -> Arduino)
+
+If the Arduino is wired to the Pi, you can send movement/pump commands from the Mac/PC (where YOLO runs) through a small HTTP bridge on the Pi.
+
+1. **On the Pi** (install serial deps once):
+   ```bash
+   sudo apt update
+   sudo apt install -y python3-serial
+   ```
+
+2. **Run the bridge on the Pi** (assumes Arduino on `/dev/ttyACM0`):
+   ```bash
+   python src/pi_arduino_bridge.py --port /dev/ttyACM0 --baud 115200
+   ```
+   Use `/dev/ttyUSB0` if your Arduino shows up there.
+
+3. **Run YOLO backend on Mac/PC and send commands**:
+   ```bash
+   python src/ui_stream_server.py \
+       --weights runs/health/yolov8m_health_pc/weights/best.pt \
+       --conf 0.45 \
+       --source 0 \
+       --imgsz 512 \
+       --device mps \
+       --command-url http://<pi_ip>:9000/command \
+       --command STOP \
+       --unhealthy-threshold 1 \
+       --command-cooldown 2
+   ```
+   - When the unhealthy count reaches the threshold, the backend POSTs a command to the Pi bridge.
+   - Example payload: `{"cmd":"STOP","counts":{"healthy":0,"unhealthy":1},"total":1}`
+
+4. **Arduino side** should read a line from Serial and act:
+   ```cpp
+   if (Serial.available()) {
+     String cmd = Serial.readStringUntil('\n');
+     if (cmd == "STOP") { /* stop motors */ }
+     if (cmd.startsWith("FWD")) { /* parse value */ }
+     if (cmd == "PUMP 1") { /* enable pump */ }
+   }
+   ```
+
+## 7. Repository hygiene & syncing
 
 - `.gitignore` already excludes heavy artifacts: datasets/, `runs/`, `.venv/`, `*.pt`, etc.
 - To version code:
@@ -122,7 +164,7 @@ Press `q` to exit. This shows detections in an OpenCV window outside the UI.
   ```
 - If you train on another PC, copy `datasets/plantdoc_health_yolo` there, run training, and copy the resulting `runs/health/<run>/weights/best.pt` back for inference/UI.
 
-## 7. Files of interest
+## 8. Files of interest
 
 - `src/train_health_model.py` – CLI for Ultralytics training.
 - `src/ui_stream_server.py` – Flask bridge powering the UI feed.

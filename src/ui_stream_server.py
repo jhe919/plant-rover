@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import json
 import time
+import urllib.request
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Generator, Optional
@@ -37,6 +39,7 @@ latest_summary: Dict[str, object] = {
     "total": 0,
     "counts": {},
 }
+last_command_time = 0.0
 
 
 def choose_device(pref: str) -> str:
@@ -78,7 +81,7 @@ def build_summary(result, labels_of_interest):
 
 def frame_generator(conf: float, imgsz: int, labels_of_interest):
     assert model is not None
-    global latest_summary
+    global latest_summary, last_command_time
     while True:
         if picam2 is not None:
             try:
@@ -108,6 +111,27 @@ def frame_generator(conf: float, imgsz: int, labels_of_interest):
             **build_summary(r0, labels_of_interest),
             "timestamp": time.time(),
         }
+        if app.config.get("COMMAND_URL"):
+            unhealthy = latest_summary.get("counts", {}).get("unhealthy", 0)
+            threshold = app.config.get("UNHEALTHY_THRESHOLD", 1)
+            cooldown = app.config.get("COMMAND_COOLDOWN", 2.0)
+            now = time.time()
+            if unhealthy >= threshold and (now - last_command_time) >= cooldown:
+                payload = {
+                    "cmd": app.config.get("COMMAND", "STOP"),
+                    "counts": latest_summary.get("counts", {}),
+                    "total": latest_summary.get("total", 0),
+                }
+                try:
+                    req = urllib.request.Request(
+                        app.config["COMMAND_URL"],
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    urllib.request.urlopen(req, timeout=0.5)
+                except Exception:
+                    pass
+                last_command_time = now
         ok, buffer = cv2.imencode(".jpg", annotated)
         if not ok:
             continue
@@ -164,6 +188,14 @@ def parse_args():
                     help="Optional capture height.")
     ap.add_argument("--picamera2", action="store_true",
                     help="Use Picamera2 for capture (recommended on Pi if V4L2 frames fail).")
+    ap.add_argument("--command-url", default=None,
+                    help="Optional HTTP endpoint (Pi bridge) to send commands when unhealthy plants detected.")
+    ap.add_argument("--command", default="STOP",
+                    help="Command text to send when threshold is hit.")
+    ap.add_argument("--unhealthy-threshold", type=int, default=1,
+                    help="Minimum unhealthy detections required to emit a command.")
+    ap.add_argument("--command-cooldown", type=float, default=2.0,
+                    help="Seconds to wait between command sends.")
     ap.add_argument("--health-labels", nargs="*", default=["healthy", "unhealthy"],
                     help="Subset of labels to highlight in the summary endpoint.")
     ap.add_argument("--host", default="0.0.0.0")
@@ -201,6 +233,10 @@ def main():
     app.config["CONF"] = args.conf
     app.config["IMGSZ"] = args.imgsz
     app.config["LABELS"] = args.health_labels
+    app.config["COMMAND_URL"] = args.command_url
+    app.config["COMMAND"] = args.command
+    app.config["UNHEALTHY_THRESHOLD"] = args.unhealthy_threshold
+    app.config["COMMAND_COOLDOWN"] = args.command_cooldown
 
     atexit.register(cleanup)
     app.run(host=args.host, port=args.port, threaded=True)
