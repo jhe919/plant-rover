@@ -118,9 +118,18 @@ def frame_generator(conf: float, imgsz: int, labels_of_interest):
         )
         r0 = results[0]
         annotated = r0.plot()
+        x_center = best_box_center_x(r0)
+        bbox_width = None
+        if x_center is not None:
+            confs = r0.boxes.conf.tolist()
+            idx = max(range(len(confs)), key=lambda i: confs[i])
+            x1, y1, x2, y2 = r0.boxes.xyxy[idx].tolist()
+            bbox_width = max(0.0, x2 - x1)
         latest_summary = {
             **build_summary(r0, labels_of_interest),
             "timestamp": time.time(),
+            "bbox_center_x": x_center,
+            "bbox_width": bbox_width,
         }
         if app.config.get("COMMAND_URL"):
             now = time.time()
@@ -136,6 +145,8 @@ def frame_generator(conf: float, imgsz: int, labels_of_interest):
                         "cmd": cmd,
                         "x_norm": x_norm,
                         "scale": scale,
+                        "bbox_center_x": latest_summary.get("bbox_center_x"),
+                        "bbox_width": latest_summary.get("bbox_width"),
                         "counts": latest_summary.get("counts", {}),
                     }
                     try:

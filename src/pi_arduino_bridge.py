@@ -42,7 +42,10 @@ def command():
     cmd = payload.get("cmd")
     if not cmd:
         return jsonify({"ok": False, "error": "missing cmd"}), 400
-    print(f"[bridge] cmd={cmd}", flush=True)
+    extra = ""
+    if "bbox_center_x" in payload or "bbox_width" in payload:
+        extra = f" center={payload.get('bbox_center_x')} width={payload.get('bbox_width')}"
+    print(f"[bridge] cmd={cmd}{extra}", flush=True)
     ser.write((cmd.strip() + "\n").encode("utf-8"))
     return jsonify({"ok": True, "cmd": cmd})
 
